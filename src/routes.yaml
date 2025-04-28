@@ -1,0 +1,12 @@
+routes:
+  /api/:
+    host: 127.0.0.1
+    port: 8001
+
+  /static/:
+    host: 127.0.0.1
+    port: 8002
+
+  /:
+    host: 127.0.0.1
+    port: 8003

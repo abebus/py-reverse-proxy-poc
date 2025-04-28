@@ -1,5 +1,8 @@
 import asyncio
+from typing import cast
+
 import uvloop
+
 # from config import load_routes # TODO trie in cython?
 
 asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
@@ -11,18 +14,18 @@ class ReverseProxy(asyncio.Protocol):
     transport: asyncio.Transport
     url: bytes
 
-    def __init__(self): 
+    def __init__(self):
         self.buffer = b""
         self._response_404 = b"HTTP/1.1 404 Not Found"
         # self._route_trie = load_routes()
 
-    def connection_made(self, transport: asyncio.Transport):
+    def connection_made(self, transport: asyncio.BaseTransport):
         print("conn made")
-        self.transport = transport
+        self.transport = cast(asyncio.Transport, transport)
 
     def data_received(self, data: bytes):
-        print(f"data recieved {data}")
-        self.url = data[data.index(b"/"):data.index(b"HTTP")]
+        # print(f"data recieved {data}")
+        self.url = data[data.index(b"/") : data.index(b"HTTP")]
         asyncio.create_task(self.route_and_pipe())
 
     async def route_and_pipe(self):
@@ -59,11 +62,8 @@ class ReverseProxy(asyncio.Protocol):
             self.transport.close()
 
 
-async def main():
+async def serve():
     loop = asyncio.get_running_loop()
     server = await loop.create_server(lambda: ReverseProxy(), "0.0.0.0", 8080)
     print("Reverse proxy running at http://localhost:8080")
     await server.serve_forever()
-
-if __name__ == "__main__":
-    asyncio.run(main())
