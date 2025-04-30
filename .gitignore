@@ -11,3 +11,6 @@ wheels/
 
 # Binaries
 *.so
+
+# Generated Cython C files
+route_trie.c

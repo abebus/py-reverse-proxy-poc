@@ -7,6 +7,6 @@ routes:
     host: 127.0.0.1
     port: 8002
 
-  /:
+  /test/:
     host: 127.0.0.1
-    port: 8003
+    port: 9999
