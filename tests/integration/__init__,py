@@ -68,6 +68,7 @@ async def test_reverse_proxy():
                     print(f"Response headers: {dict(resp.headers)}")
 
                     if method != "HEAD":
+                        assert body, "Response body is missing"
                         result = json.loads(body)
                         assert result["method"] == method, f"Method mismatch: expected {method}, got {result['method']}"
                         assert result["headers"].get("X-Test-Header") == method, f"Header mismatch: expected {method}, got {result['headers'].get('X-Test-Header')}"
