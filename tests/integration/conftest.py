@@ -11,7 +11,15 @@ multiprocessing.set_start_method("spawn", force=True)
 pytestmarkasyncio = pytest.mark.asyncio
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="session", autouse=True)
+def proxy_logging():
+    from rp_logging import setup_logging
+
+    setup_logging()
+    return
+
+
+@pytest.fixture(scope="session", autouse=True)
 def event_loop_policy():
     return uvloop.EventLoopPolicy()
 
@@ -22,6 +30,9 @@ def _run_server_in_process():
 
     async def run():
         from protocol import ReverseProxy
+        from rp_logging import setup_logging
+
+        setup_logging()
 
         server = await loop.create_server(
             ReverseProxy, "127.0.0.1", 8080, start_serving=False
@@ -48,12 +59,18 @@ async def proxy_server():  # FIXME idk why and how but with pytest-asyncio `serv
 
 
 @pytest_asyncio.fixture(scope="session")
-async def upstream_server(): # TODO? make separate binary upstream (mb in go) and call it from `subprocess`? 
+async def upstream_server():  # TODO? make separate binary upstream (mb in go) and call it from `subprocess`?
     """Start a dummy upstream server."""
 
     async def echo_handler(request):
-        data = await request.read()
-        return web.Response(body=data)
+        response = web.StreamResponse(status=200)
+        response.content_type = "application/octet-stream"
+        await response.prepare(request)
+
+        async for chunk in request.content.iter_chunked(65536):
+            await response.write(chunk)
+
+        await response.write_eof()
 
     app = web.Application()
     app.router.add_route("*", "/{tail:.*}", echo_handler)

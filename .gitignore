@@ -14,3 +14,6 @@ wheels/
 
 # Generated Cython C files
 route_trie.c
+
+# logs
+*.log

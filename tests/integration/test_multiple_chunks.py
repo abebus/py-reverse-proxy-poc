@@ -8,15 +8,11 @@ from .conftest import pytestmarkasyncio
 
 @pytestmarkasyncio
 @pytest.mark.parametrize(
-    "data",
-    [
-        os.urandom(70_000),
-        os.urandom(80_000),  # FIXME this fails
-        #     os.urandom(256_000),
-        #       os.urandom(1_000_000)
-    ],
+    "data_size",
+    [70_000, 80_000, 256_000, 1_000_000],
 )
-async def test_404_for_unrouted_path(proxy_server, data):
+async def test_payload_size(proxy_server, data_size): # FIXME fails, sometimes silently
+    data = data = b"x" * data_size
     url = "http://0.0.0.0:8080/test"
 
     async with ClientSession() as session:
