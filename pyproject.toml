@@ -16,6 +16,7 @@ dev = [
     "cython>=3.0.12",
     "mypy>=1.15.0",
     "pytest>=8.3.5",
+    "pytest-asyncio>=0.26.0",
     "ruff>=0.11.7",
     "setuptools>=80.0.0",
     "types-pyyaml>=6.0.12.20250402",
@@ -36,3 +37,8 @@ packages = []
 [[tool.setuptools.ext-modules]]
 name = "route_trie"
 sources = ["src/route_trie.pyx"]
+
+[tool.pytest.ini_options]
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
+asyncio_mode = "auto"

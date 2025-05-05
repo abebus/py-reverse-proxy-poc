@@ -1,7 +1,8 @@
 import asyncio
+import logging
 from typing import cast
 
-from httptools import HttpRequestParser
+from httptools import HttpRequestParser, parse_url
 
 from config import load_routes
 
@@ -15,103 +16,129 @@ except ImportError:
         RuntimeWarning,
     )
 else:
-    asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
+    if asyncio.get_event_loop_policy() is not uvloop.EventLoopPolicy:
+        asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
 
 
 class ReverseProxy(asyncio.Protocol):
-    __slots__ = (
-        "transport",
-        "url",
-        "parser",
-        "target",
-        "upstream_writer",
-        "upstream_reader",
-        "message_complete",
-        "preconnect_buffer",
-        "upstream_ready",
-        "_response_404",
-        "_response_502",
-        "_route_trie",
+    # region Init
+
+    logger = logging.getLogger(__name__)
+
+    __slots__ = ("transport", "parser", "path")
+
+    __response_404 = (
+        b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
     )
+    __response_502 = (
+        b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+    )
+    __route_trie = load_routes()
+    _tasks = set()
+    _loop = asyncio.get_running_loop()
 
     def __init__(self):
         self.parser = HttpRequestParser(self)
-        self._response_404 = (
-            b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-        )
-        self._response_502 = b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-        self._route_trie = load_routes()
-        self.target = None
-        self.upstream_writer = None
-        self.upstream_reader = None
-        self.preconnect_buffer = []
-        self.upstream_ready = asyncio.Event()
+
+    # endregion
+
+    # region asyncio.Protocol callbacks
 
     def connection_made(self, transport: asyncio.BaseTransport):
+        self.logger.debug("Connection established: %s", transport)
         self.transport = cast(asyncio.Transport, transport)
+
+    def connection_lost(self, exc: Exception | None):
+        if exc:
+            self.logger.warning("Connection lost with error: %s", exc, exc_info=True)
+        else:
+            self.logger.debug("Connection closed cleanly")
+        self.transport = None
 
     def data_received(self, data: bytes):
         self.parser.feed_data(data)
+        self.logger.debug("Received data: %r", data)
 
-        if self.upstream_ready.is_set():
-            self.upstream_writer.write(data)
-            asyncio.create_task(self.upstream_writer.drain())
-        else:
-            self.preconnect_buffer.append(data)
+        task = self._loop.create_task(self.route_and_pipe(data))
+        task.add_done_callback(self._tasks.discard)
+        self._tasks.add(task)
 
-    def on_url(self, url: bytes):
-        self.url = url
+    # endregion
 
-    def on_message_complete(self):
-        asyncio.create_task(self.route_and_pipe())
+    # region HttpRequestParser callbacks
 
-    async def route_and_pipe(self):
-        path = self.url.split(b"?", 1)[0]
-        self.target = self._route_trie.match(path)
+    def on_url(
+        self,
+        url: bytes,
+        parse_url=parse_url,  # bytecode opt
+    ):
+        self.path = parse_url(url).path
+        self.logger.debug("Parsed URL path: %s", self.path)
 
-        if not self.target:
-            self.transport.write(self._response_404)
+    # endregion
+
+    # region Internal methods
+    async def route_and_pipe(
+        self,
+        data: bytes,
+        __open_connection=asyncio.open_connection,  # bytecode opt
+    ):
+        target = self.__route_trie.match(self.path)
+
+        if not target:
+            self.logger.info("No route matched for path %s, returning 404", self.path)
+            self.transport.write(self.__response_404)
             self.transport.close()
             return
 
         try:
-            self.upstream_reader, self.upstream_writer = await asyncio.open_connection(
-                self.target.host.decode(), self.target.port.decode()
+            upstream_reader, upstream_writer = await __open_connection(
+                target.host.decode(), target.port.decode()
             )
+            self.logger.info("Connected to upstream %s:%s", target.host, target.port)
 
-            # Flush early data
-            for chunk in self.preconnect_buffer:
-                self.upstream_writer.write(chunk)
-            await self.upstream_writer.drain()
-            self.preconnect_buffer.clear()
+            upstream_writer.write(data)
+            await upstream_writer.drain()
 
-            self.upstream_ready.set()
+            self.logger.debug("Sent request to upstream")
 
-            asyncio.create_task(self.pipe_response(self.upstream_reader))
-        except Exception as e:
-            print(f"[!] Failed to connect to upstream: {e}")
-            self.transport.write(self._response_502)
+            await self.pipe_response(upstream_reader)
+
+            upstream_writer.close()
+            await upstream_writer.wait_closed()
+
+        except Exception as exc:
+            self.logger.error("Failed to connect to upstream: %s", exc, exc_info=True)
+            self.transport.write(self.__response_502)
+
+        if self.transport and not self.transport.is_closing():
+            self.logger.debug("Closing transport to client")
             self.transport.close()
 
-    async def pipe_response(self, reader: asyncio.StreamReader):
+    async def pipe_response(
+        self,
+        reader: asyncio.StreamReader,
+        len=len,  # bytecode opt
+    ):
         try:
             while not reader.at_eof():
-                chunk = await asyncio.wait_for(reader.read(65536), timeout=3)
+                chunk = await reader.read(65536)
+                reader.feed_data
                 if not chunk:
                     break
+                self.logger.debug("Piping chunk of size %d bytes to client", len(chunk))
                 self.transport.write(chunk)
-        except asyncio.TimeoutError:
-            print("[!] Timeout while reading response")
+        except Exception as exc:
+            self.logger.error("Error while piping response: %s", exc, exc_info=True)
         finally:
-            try:
+            if self.transport and self.transport.can_write_eof():
                 self.transport.write_eof()
-            except (AttributeError, ConnectionResetError):
-                pass
-            self.transport.close()
 
 
 async def serve(host="0.0.0.0", port=8080):
     loop = asyncio.get_running_loop()
-    server = await loop.create_server(lambda: ReverseProxy(), host, port)
-    print(f"Reverse proxy running at http://{host}:{port}")
-    await server.serve_forever()
+    server = await loop.create_server(ReverseProxy, host, port, start_serving=False)
+    ReverseProxy.logger.info("Reverse proxy running at http://%s:%s", host, port)
+
+    async with server:
+        await server.serve_forever()
