@@ -3,7 +3,7 @@ name = "py-reverse-proxy-poc"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.13"
 dependencies = [
     "httptools>=0.6.4",
     "pyyaml>=6.0.2",
@@ -14,9 +14,10 @@ dependencies = [
 dev = [
     "aiohttp>=3.11.18",
     "cython>=3.0.12",
+    "debugpy>=1.8.14",
     "mypy>=1.15.0",
-    "pytest>=8.3.5",
-    "pytest-asyncio>=0.26.0",
+    "pytest==8.1.2",
+    "pytest-asyncio==0.21.1",
     "ruff>=0.11.7",
     "setuptools>=80.0.0",
     "types-pyyaml>=6.0.12.20250402",
@@ -41,4 +42,4 @@ sources = ["src/route_trie.pyx"]
 [tool.pytest.ini_options]
 asyncio_default_fixture_loop_scope = "session"
 asyncio_default_test_loop_scope = "session"
-asyncio_mode = "auto"
+asyncio_mode = "strict"

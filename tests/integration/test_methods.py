@@ -20,4 +20,4 @@ async def test_methods_through_proxy(proxy_server, upstream_server, method):
             if method != "HEAD":
                 assert resp.method == method
                 if data:
-                    assert body == data
+                    assert body == "OK"

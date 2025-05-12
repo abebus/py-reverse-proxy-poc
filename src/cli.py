@@ -1,7 +1,7 @@
 import argparse
 import asyncio
 
-from protocol import serve
+from server import serve
 
 
 def main():
@@ -25,5 +25,6 @@ def main():
 
 if __name__ == "__main__":
     from .rp_logging import setup_logging
+
     setup_logging()
     main()

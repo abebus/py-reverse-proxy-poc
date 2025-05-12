@@ -11,9 +11,13 @@ wheels/
 
 # Binaries
 *.so
+echo_server
 
 # Generated Cython C files
 route_trie.c
 
 # logs
 *.log
+
+# vscode
+.vscode

@@ -1,31 +1,39 @@
+from __future__ import annotations
+
 import asyncio
 import logging
-from typing import Any, Awaitable, Callable, Sized, cast
+from typing import Callable
 
 from httptools import HttpRequestParser, parse_url
 
 from config import load_routes
 
-try:
-    import uvloop
-except ImportError:
-    import warnings
 
-    warnings.warn(
-        "uvloop is not installed. Falling back to default asyncio event loop.",
-        RuntimeWarning,
-    )
-else:
-    if asyncio.get_event_loop_policy() is not uvloop.EventLoopPolicy:
-        asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
+class UpStreamReaderProtocol(asyncio.StreamReaderProtocol):
+    proxy: "ReverseProxy" | None = None
+
+    def data_received(
+        self,
+        data: bytes,
+        __super_call=asyncio.StreamReaderProtocol.data_received,  # bytecode opt
+    ):
+        __super_call(self, data=data)
+        self.proxy.write(data)
 
 
-class ReverseProxy(asyncio.Protocol):
+class ReverseProxy:
     # region Init
 
     logger = logging.getLogger(__name__)
 
-    __slots__ = ("transport", "req_parser", "path", "should_keep_alive")
+    __slots__ = (
+        "transport",
+        "upstream_transport",
+        "req_parser",
+        "path",
+        "should_keep_alive",
+        "__buf",
+    )
 
     __response_404 = (
         b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
@@ -35,14 +43,19 @@ class ReverseProxy(asyncio.Protocol):
     )
     __route_trie = load_routes()
     _tasks: set[asyncio.Task] = set()
-    _loop = asyncio.get_running_loop()
+    _loop = asyncio.get_event_loop()
 
-    def __init__(self):
+    def __init__(
+        self,
+        bytearray=bytearray,  # bytecode opt
+        HttpRequestParser=HttpRequestParser,  # bytecode opt
+    ):
         self.req_parser = HttpRequestParser(self)
-        # self.resp_parser = HttpResponseParser(self)
-        # self.resp_parser.set_dangerous_leniencies(lenient_data_after_close=True)
         self.req_parser.set_dangerous_leniencies(lenient_data_after_close=True)
-        self.should_keep_alive = False
+        self.should_keep_alive: bool = False
+        self.__buf: bytearray = bytearray()
+        self.upstream_transport: asyncio.Transport | None = None
+        self.path: str | None = None
 
     # endregion
 
@@ -50,29 +63,36 @@ class ReverseProxy(asyncio.Protocol):
 
     def connection_made(self, transport: asyncio.BaseTransport):
         self.logger.debug("Connection established: %s", transport)
-        self.transport = cast(asyncio.Transport, transport)
+        self.transport = transport
 
-    def connection_lost(self, exc: Exception | None):
+    def connection_lost(self, exc: Exception | None = None):
         if exc:
             self.logger.warning("Connection lost with error: %s", exc, exc_info=True)
         else:
             self.logger.debug("Connection closed cleanly")
-        self.transport = None
+
+        if self.transport and not self.transport.is_closing():
+            self.transport.close()
+            self.transport = None
+
+        if self.upstream_transport and not self.upstream_transport.is_closing():
+            self.upstream_transport.close()
+            self.upstream_transport = None
 
     def data_received(
         self,
         data: bytes,
-        len: Callable[[Sized], int] = len,  # bytecode opt
     ):
-        self.should_keep_alive = False
-
         self.req_parser.feed_data(data)
-        self.logger.debug("Received data with len: %s", len(data))
 
-        # Immediately start proxying this data to the upstream
-        task = self._loop.create_task(self.route_and_pipe(data))
-        task.add_done_callback(self._tasks.discard)
-        self._tasks.add(task)
+        if self.upstream_transport:
+            self.upstream_transport.write(data)
+        else:
+            self.__buf.extend(data)
+
+    def eof_received(self):
+        if self.upstream_transport:
+            self.upstream_transport.write_eof()
 
     # endregion
 
@@ -89,9 +109,7 @@ class ReverseProxy(asyncio.Protocol):
     def on_headers_complete(self):
         self.should_keep_alive = self.req_parser.should_keep_alive()
         self.logger.debug(f"{self.should_keep_alive=} {self.transport}")
-
-    def on_message_complete(self):
-        self.transport.pause_reading()
+        self._loop.create_task(self.route_and_pipe())
 
     # endregion
 
@@ -103,67 +121,38 @@ class ReverseProxy(asyncio.Protocol):
 
     async def route_and_pipe(
         self,
-        data: bytes,
-        __open_connection: Callable[
-            [str, int], Awaitable[tuple[asyncio.StreamReader, asyncio.StreamWriter]]
-        ] = asyncio.open_connection,  # bytecode opt
+        ConnectionError=ConnectionError,  # bytecode opt
+        bytes=bytes,  # bytecode opt
+        UpStreamReaderProtocol=UpStreamReaderProtocol,  # bytecode opt
+        asyncio=asyncio,  # bytecode opt
     ):
         target = self.__route_trie.match(self.path)
 
         if not target:
             self.logger.info("No route matched for path %s, returning 404", self.path)
             self.write(self.__response_404)
-            self.transport.close()
+            self.connection_lost()
             return
 
         try:
-            upstream_reader, upstream_writer = await __open_connection(
-                target.host.decode(), target.port.decode()
-            )
-            self.logger.info("Connected to upstream %s:%s", target.host, target.port)
+            self.logger.debug("Connection to %s:%s", target.host, target.port)
+            if self.upstream_transport is None or self.upstream_transport.is_closing():
+                (
+                    self.upstream_transport,
+                    upstream_proto,
+                ) = await self._loop.create_connection(
+                    lambda: UpStreamReaderProtocol(
+                        asyncio.StreamReader(loop=self._loop), loop=self._loop
+                    ),
+                    target.host.decode(),
+                    target.port.decode(),
+                )
+                upstream_proto.proxy = self
 
-            upstream_writer.write(data)
-            await upstream_writer.drain()
+            self.upstream_transport.write(bytes(self.__buf))
+            self.__buf.clear()
 
-            await self.pipe_response(upstream_reader)
-
-            if not self.should_keep_alive:
-                upstream_writer.close()
-                await upstream_writer.wait_closed()
-
-        except Exception as exc:
+        except ConnectionError as exc:
             self.logger.error("Failed to connect to upstream: %s", exc, exc_info=True)
             self.write(self.__response_502)
-
-        if self.transport:
-            if not self.should_keep_alive:
-                if self.transport.can_write_eof():
-                    self.transport.write_eof()
-                self.transport.close()
-            else:
-                self.transport.resume_reading()
-
-    async def pipe_response(
-        self,
-        reader: asyncio.StreamReader,
-        len=len,  # bytecode opt
-    ):
-        self.logger.debug("Sent request to upstream")
-        try:
-            while not reader.at_eof():
-                chunk = await reader.read(65536)
-                if not chunk:
-                    break
-                self.logger.debug("Piping chunk of size %d bytes to client", len(chunk))
-                self.write(chunk)
-        except Exception as exc:
-            self.logger.error("Error while piping response: %s", exc, exc_info=True)
-
-
-async def serve(host="0.0.0.0", port=8080):
-    loop = asyncio.get_running_loop()
-    server = await loop.create_server(ReverseProxy, host, port, start_serving=False)
-    ReverseProxy.logger.info("Reverse proxy running at http://%s:%s", host, port)
-
-    async with server:
-        await server.serve_forever()
+            self.connection_lost()
