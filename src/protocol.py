@@ -20,7 +20,6 @@ class UpStreamReaderProtocol(asyncio.StreamReaderProtocol):
         __super_call(self, data=data)
         self.proxy.write(data)
 
-
 class ReverseProxy:
     # region Init
 
@@ -32,6 +31,7 @@ class ReverseProxy:
         "req_parser",
         "path",
         "should_keep_alive",
+        "target",
         "__buf",
     )
 
@@ -56,6 +56,7 @@ class ReverseProxy:
         self.__buf: bytearray = bytearray()
         self.upstream_transport: asyncio.Transport | None = None
         self.path: str | None = None
+        self.target = None
 
     # endregion
 
@@ -65,7 +66,7 @@ class ReverseProxy:
         self.logger.debug("Connection established: %s", transport)
         self.transport = transport
 
-    def connection_lost(self, exc: Exception | None = None):
+    def connection_lost(self, exc: Exception | None = None): # TODO: handle Connection: close properly
         if exc:
             self.logger.warning("Connection lost with error: %s", exc, exc_info=True)
         else:
@@ -83,12 +84,12 @@ class ReverseProxy:
         self,
         data: bytes,
     ):
-        self.req_parser.feed_data(data)
-
-        if self.upstream_transport:
+        if self.upstream_transport and not self.__buf:
             self.upstream_transport.write(data)
         else:
             self.__buf.extend(data)
+        self.req_parser.feed_data(data)
+
 
     def eof_received(self):
         if self.upstream_transport:
@@ -105,6 +106,26 @@ class ReverseProxy:
     ):
         self.path = parse_url(url).path
         self.logger.debug("Parsed URL path: %s", self.path)
+        match = self.__route_trie.match(self.path)
+
+        if not match:
+            self.logger.info("No route matched for path %s, returning 404", self.path)
+            self.write(self.__response_404)
+            self.connection_lost()
+            return
+        
+        key, target = match
+        self.target = target
+        
+        if key == self.path:
+            return
+        
+        key_position = self.__buf.find(key)
+        self.logger.debug("Curr buf is %s", self.__buf)
+        if key_position != -1:
+            self.__buf = self.__buf[:key_position] + self.__buf[key_position + len(key):] # remove added path from req to backend
+            self.logger.debug("Modifying buffer to %s", self.__buf)
+        
 
     def on_headers_complete(self):
         self.should_keep_alive = self.req_parser.should_keep_alive()
@@ -126,16 +147,8 @@ class ReverseProxy:
         UpStreamReaderProtocol=UpStreamReaderProtocol,  # bytecode opt
         asyncio=asyncio,  # bytecode opt
     ):
-        target = self.__route_trie.match(self.path)
-
-        if not target:
-            self.logger.info("No route matched for path %s, returning 404", self.path)
-            self.write(self.__response_404)
-            self.connection_lost()
-            return
-
         try:
-            self.logger.debug("Connection to %s:%s", target.host, target.port)
+            self.logger.debug("Connection to %s:%s", self.target.host, self.target.port)
             if self.upstream_transport is None or self.upstream_transport.is_closing():
                 (
                     self.upstream_transport,
@@ -144,8 +157,8 @@ class ReverseProxy:
                     lambda: UpStreamReaderProtocol(
                         asyncio.StreamReader(loop=self._loop), loop=self._loop
                     ),
-                    target.host.decode(),
-                    target.port.decode(),
+                    self.target.host.decode(),
+                    self.target.port.decode(),
                 )
                 upstream_proto.proxy = self
 
@@ -156,3 +169,11 @@ class ReverseProxy:
             self.logger.error("Failed to connect to upstream: %s", exc, exc_info=True)
             self.write(self.__response_502)
             self.connection_lost()
+        finally:
+            # After sending and flushing the request
+            if not self.should_keep_alive:
+                self.logger.debug("Closing client and upstream due to no keep-alive")
+                self.connection_lost()
+            else:
+                self.logger.debug("Keep-alive active, keeping connections open")
+

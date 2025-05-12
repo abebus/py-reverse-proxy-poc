@@ -13,6 +13,7 @@ def load_routes(path: Path = Path(__file__).parent / "routes.yaml") -> RouteTrie
     for route, target in data["routes"].items():
         trie.insert(
             route.encode(),
-            Target(target["host"].encode(), str(target.get("port", "0")).encode()),
+            Target(target["host"].encode(), str(target.get("port", "80")).encode()),
         )
     return trie
+ 

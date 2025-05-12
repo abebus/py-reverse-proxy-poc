@@ -41,15 +41,25 @@ class RouteTrie:
             node = node.children.setdefault(part, RouteTrieNode())
         node.target = target
 
-    def match(self, path: bytes) -> Optional[Target]:
+    def match(self, path: bytes) -> tuple[bytes, Target] | None:
         node: RouteTrieNode = self.root
         parts: list[bytes] = [p for p in path.strip(b"/").split(b"/") if p]
-        last_target: Optional[Target] = self.root.target  # fallback to /
-        for part in parts:
+        matched_parts = []
+        last_target: Target | None = self.root.target
+        last_depth: int = 0 if self.root.target else -1
+
+        for i, part in enumerate(parts):
             if part in node.children:
                 node = node.children[part]
+                matched_parts.append(part)
                 if node.target is not None:
                     last_target = node.target
+                    last_depth = i + 1
             else:
                 break
-        return last_target
+
+        if last_target is not None:
+            matched_path = b"/" + b"/".join(parts[:last_depth])
+            return matched_path, last_target
+        return None
+

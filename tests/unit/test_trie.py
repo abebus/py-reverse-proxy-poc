@@ -1,5 +1,4 @@
 import unittest
-
 from route_trie import RouteTrie, Target
 
 
@@ -12,41 +11,49 @@ class TestRouteTrie(unittest.TestCase):
         self.trie.insert(b"/static/assets", Target(host=b"static.local", port=b"8082"))
 
     def test_root_match(self):
-        target = self.trie.match(b"/")
+        key, target = self.trie.match(b"/")
+        self.assertEqual(key, b"/")
         self.assertEqual(target.host, b"default.local")
         self.assertEqual(target.port, b"80")
 
     def test_exact_match(self):
-        target = self.trie.match(b"/api")
+        key, target = self.trie.match(b"/api")
+        self.assertEqual(key, b"/api")
         self.assertEqual(target.host, b"api.local")
         self.assertEqual(target.port, b"8080")
 
     def test_partial_match(self):
-        target = self.trie.match(b"/api/v1/resource")
+        key, target = self.trie.match(b"/api/v1/resource")
+        self.assertEqual(key, b"/api/v1")
         self.assertEqual(target.host, b"apiv1.local")
         self.assertEqual(target.port, b"8081")
 
     def test_nested_match(self):
-        target = self.trie.match(b"/static/assets/css/style.css")
+        key, target = self.trie.match(b"/static/assets/css/style.css")
+        self.assertEqual(key, b"/static/assets")
         self.assertEqual(target.host, b"static.local")
         self.assertEqual(target.port, b"8082")
 
     def test_no_match_fallback_to_root(self):
-        target = self.trie.match(b"/unknown/path")
+        key, target = self.trie.match(b"/unknown/path")
+        self.assertEqual(key, b"/")
         self.assertEqual(target.host, b"default.local")
         self.assertEqual(target.port, b"80")
 
     def test_trailing_slashes(self):
-        target = self.trie.match(b"/api/")
+        key, target = self.trie.match(b"/api/")
+        self.assertEqual(key, b"/api")
         self.assertEqual(target.host, b"api.local")
         self.assertEqual(target.port, b"8080")
 
     def test_double_slashes(self):
-        target = self.trie.match(b"//api//v1//")
+        key, target = self.trie.match(b"//api//v1//")
+        self.assertEqual(key, b"/api/v1")
         self.assertEqual(target.host, b"apiv1.local")
         self.assertEqual(target.port, b"8081")
 
     def test_empty_path(self):
-        target = self.trie.match(b"")
+        key, target = self.trie.match(b"")
+        self.assertEqual(key, b"/")
         self.assertEqual(target.host, b"default.local")
         self.assertEqual(target.port, b"80")
