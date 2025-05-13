@@ -62,4 +62,3 @@ class RouteTrie:
             matched_path = b"/" + b"/".join(parts[:last_depth])
             return matched_path, last_target
         return None
-

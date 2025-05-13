@@ -20,6 +20,7 @@ class UpStreamReaderProtocol(asyncio.StreamReaderProtocol):
         __super_call(self, data=data)
         self.proxy.write(data)
 
+
 class ReverseProxy:
     # region Init
 
@@ -51,7 +52,9 @@ class ReverseProxy:
         HttpRequestParser=HttpRequestParser,  # bytecode opt
     ):
         self.req_parser = HttpRequestParser(self)
-        self.req_parser.set_dangerous_leniencies(lenient_data_after_close=True)
+        self.req_parser.set_dangerous_leniencies(
+            lenient_keep_alive=True, lenient_data_after_close=True
+        )
         self.should_keep_alive: bool = False
         self.__buf: bytearray = bytearray()
         self.upstream_transport: asyncio.Transport | None = None
@@ -66,7 +69,9 @@ class ReverseProxy:
         self.logger.debug("Connection established: %s", transport)
         self.transport = transport
 
-    def connection_lost(self, exc: Exception | None = None): # TODO: handle Connection: close properly
+    def connection_lost(
+        self, exc: Exception | None = None
+    ):  # TODO: handle Connection: close properly
         if exc:
             self.logger.warning("Connection lost with error: %s", exc, exc_info=True)
         else:
@@ -90,7 +95,6 @@ class ReverseProxy:
             self.__buf.extend(data)
         self.req_parser.feed_data(data)
 
-
     def eof_received(self):
         if self.upstream_transport:
             self.upstream_transport.write_eof()
@@ -113,19 +117,20 @@ class ReverseProxy:
             self.write(self.__response_404)
             self.connection_lost()
             return
-        
+
         key, target = match
         self.target = target
-        
+
         if key == self.path:
             return
-        
+
         key_position = self.__buf.find(key)
         self.logger.debug("Curr buf is %s", self.__buf)
         if key_position != -1:
-            self.__buf = self.__buf[:key_position] + self.__buf[key_position + len(key):] # remove added path from req to backend
+            self.__buf = (
+                self.__buf[:key_position] + self.__buf[key_position + len(key) :]
+            )  # remove added path from req to backend
             self.logger.debug("Modifying buffer to %s", self.__buf)
-        
 
     def on_headers_complete(self):
         self.should_keep_alive = self.req_parser.should_keep_alive()
@@ -176,4 +181,3 @@ class ReverseProxy:
                 self.connection_lost()
             else:
                 self.logger.debug("Keep-alive active, keeping connections open")
-

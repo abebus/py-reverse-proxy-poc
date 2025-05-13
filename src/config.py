@@ -16,4 +16,3 @@ def load_routes(path: Path = Path(__file__).parent / "routes.yaml") -> RouteTrie
             Target(target["host"].encode(), str(target.get("port", "80")).encode()),
         )
     return trie
- 
