@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from weakref import WeakSet
 from typing import TYPE_CHECKING, Callable
+from weakref import WeakSet
 
 from httptools import HttpRequestParser, parse_url
 
@@ -27,8 +27,7 @@ class UpStreamReaderProtocol(asyncio.StreamReaderProtocol):
         self.proxy.write(data)
 
     def eof_received(self, __super_call=asyncio.StreamReaderProtocol.eof_received):
-        if self.proxy:
-            self.proxy.upstream_done()
+        self.proxy.upstream_done()
         return __super_call(self)
 
 
@@ -118,6 +117,7 @@ class ReverseProxy:
         self,
         url: bytes,
         parse_url: Callable[[bytes], object] = parse_url,  # bytecode opt
+        len: Callable[[object], int] = len,  # bytecode opt
     ):
         self.path = parse_url(url).path
         self.logger.debug("Parsed URL path: %s", self.path)
@@ -146,10 +146,11 @@ class ReverseProxy:
     def on_headers_complete(self):
         self.should_keep_alive = self.req_parser.should_keep_alive()
         self.logger.debug(f"{self.should_keep_alive=} {self.transport}")
+
         t = self._loop.create_task(self.route_and_pipe())
         self._tasks.add(t)
         t.add_done_callback(self._tasks.discard)
-        
+
     # endregion
 
     # region Internal methods
