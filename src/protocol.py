@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from weakref import WeakSet
 from typing import TYPE_CHECKING, Callable
 
 from httptools import HttpRequestParser, parse_url
@@ -53,7 +54,7 @@ class ReverseProxy:
         b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
     )
     __route_trie = load_routes()
-    _tasks: set[asyncio.Task] = set()
+    _tasks: WeakSet[asyncio.Task] = WeakSet()
     _loop = asyncio.get_event_loop()
 
     def __init__(
@@ -145,8 +146,10 @@ class ReverseProxy:
     def on_headers_complete(self):
         self.should_keep_alive = self.req_parser.should_keep_alive()
         self.logger.debug(f"{self.should_keep_alive=} {self.transport}")
-        self._loop.create_task(self.route_and_pipe())
-
+        t = self._loop.create_task(self.route_and_pipe())
+        self._tasks.add(t)
+        t.add_done_callback(self._tasks.discard)
+        
     # endregion
 
     # region Internal methods
