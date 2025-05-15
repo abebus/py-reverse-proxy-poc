@@ -4,7 +4,7 @@ This proxy is Layer 7 in theory (it reads the URL/Connection header) but Layer 4
 
 Run test from repo root (not from `./test`)
 ```
-uv run python -m unittest discover -s tests
+uv run python -m pytest tests/
 ```
 
 Building wheels
