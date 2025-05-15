@@ -103,7 +103,7 @@ class ReverseProxy:
             self.upstream_transport.write(data)
         else:
             self.__buf.extend(data)
-        self.req_parser.feed_data(data)
+            self.req_parser.feed_data(data)
 
     def eof_received(self):
         if self.upstream_transport:
