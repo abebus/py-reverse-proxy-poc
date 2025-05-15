@@ -2,14 +2,19 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
 
 from httptools import HttpRequestParser, parse_url
 
 from config import load_routes
 
+if TYPE_CHECKING:
+    from route_trie import Target
+
 
 class UpStreamReaderProtocol(asyncio.StreamReaderProtocol):
+    __slots__ = ()
+
     proxy: "ReverseProxy" | None = None
 
     def data_received(
@@ -19,6 +24,11 @@ class UpStreamReaderProtocol(asyncio.StreamReaderProtocol):
     ):
         __super_call(self, data=data)
         self.proxy.write(data)
+
+    def eof_received(self, __super_call=asyncio.StreamReaderProtocol.eof_received):
+        if self.proxy:
+            self.proxy.upstream_done()
+        return __super_call(self)
 
 
 class ReverseProxy:
@@ -59,13 +69,13 @@ class ReverseProxy:
         self.__buf: bytearray = bytearray()
         self.upstream_transport: asyncio.Transport | None = None
         self.path: str | None = None
-        self.target = None
+        self.target: Target | None = None
 
     # endregion
 
     # region asyncio.Protocol callbacks
 
-    def connection_made(self, transport: asyncio.BaseTransport):
+    def connection_made(self, transport: asyncio.Transport):  # type: ignore
         self.logger.debug("Connection established: %s", transport)
         self.transport = transport
 
@@ -145,6 +155,11 @@ class ReverseProxy:
         if self.transport and not self.transport.is_closing():
             self.transport.write(data)
 
+    def upstream_done(self):
+        self.logger.debug("Upstream finished sending data (EOF)")
+        if not self.should_keep_alive:
+            self.connection_lost()
+
     async def route_and_pipe(
         self,
         ConnectionError=ConnectionError,  # bytecode opt
@@ -174,10 +189,3 @@ class ReverseProxy:
             self.logger.error("Failed to connect to upstream: %s", exc, exc_info=True)
             self.write(self.__response_502)
             self.connection_lost()
-        finally:
-            # After sending and flushing the request
-            if not self.should_keep_alive:
-                self.logger.debug("Closing client and upstream due to no keep-alive")
-                self.connection_lost()
-            else:
-                self.logger.debug("Keep-alive active, keeping connections open")

@@ -14,6 +14,7 @@ dependencies = [
 dev = [
     "aiohttp>=3.11.18",
     "cython>=3.0.12",
+    "cython-lint>=0.16.6",
     "debugpy>=1.8.14",
     "mypy>=1.15.0",
     "psutil>=7.0.0",

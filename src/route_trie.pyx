@@ -4,7 +4,7 @@ from cpython.bytes cimport PyBytes_AS_STRING, PyBytes_GET_SIZE
 from libc.stdlib cimport malloc, free
 from libc.string cimport memcpy
 
-DEF SLASH = 47  # '/'
+DEF SLASH = 47  # "slash/"
 
 cdef inline list fast_path_split(bytes path):
     cdef char* data = PyBytes_AS_STRING(path)
